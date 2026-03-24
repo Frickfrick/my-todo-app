@@ -1,24 +1,59 @@
 'use client'
 
-import { supabase } from '../lib/supabase'
 import { useState, useEffect } from 'react'
+import { createBrowserClient } from '@supabase/ssr'
+import { useRouter } from 'next/navigation'
 
 interface Task {
   id: string;
   title: string;
   status: string;
+  user_id: string;
+  created_at: string;
 }
 
 export default function Home() {
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  )
+
+  const router = useRouter()
+
   const [tasks, setTasks] = useState<Task[]>([])
   const [newTaskTitle, setNewTaskTitle] = useState('')
 
   async function fetchTasks() {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('*')
-      .order('created_at', { ascending: false }) // Neueste Aufgaben oben
-    if (data) setTasks(data)
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    console.log("Kein User angemeldet");
+    setTasks([]);
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .eq('user_id', user.id) 
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error("Fehler beim Laden der Tasks:", error.message);
+  } else {
+    setTasks(data);
+  }
+  }
+
+  async function handleLogout() {
+    const { error } = await supabase.auth.signOut()
+    if (error) {
+      console.error("Fehler beim Abmelden:", error.message)
+    } else {
+      setTasks([]) 
+      router.push('/login')
+      router.refresh()
+    }
   }
 
   useEffect(() => {
@@ -26,16 +61,35 @@ export default function Home() {
   }, [])
 
   async function addTask(e: React.FormEvent) {
-    e.preventDefault()
-    if (newTaskTitle.trim() === '') return
-    const { error } = await supabase
-      .from('tasks')
-      .insert([{ title: newTaskTitle, status: 'offen' }])
-    if (!error) {
-      setNewTaskTitle('')
-      fetchTasks()
-    }
+  e.preventDefault()
+  if (newTaskTitle.trim() === '') return
+
+  // 1. Zuerst der aktuelle User
+  const { data: { user } } = await supabase.auth.getUser()
+
+  if (!user) {
+    alert("Bitte logge dich ein, um Aufgaben zu speichern.")
+    return
   }
+
+  // 2. Task zusammenfügen mit der user_id
+  const { error } = await supabase
+    .from('tasks')
+    .insert([
+      { 
+        title: newTaskTitle, 
+        status: 'offen',
+        user_id: user.id 
+      }
+    ])
+
+  if (!error) {
+    setNewTaskTitle('')
+    fetchTasks()
+  } else {
+    console.error("Fehler beim Hinzufügen:", error.message)
+  }
+}
 
   async function toggleStatus(id: string, currentStatus: string) {
     const nextStatus = currentStatus === 'offen' ? 'erledigt' : 'offen'
@@ -54,6 +108,17 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-slate-50 py-12 px-4">
       <main className="max-w-xl mx-auto">
+
+      {/* Logout-Leiste ganz oben */}
+      <div className="flex justify-end mb-4">
+        <button 
+          onClick={handleLogout}
+          className="text-sm font-medium text-slate-500 hover:text-red-600 transition-colors"
+        >
+          Abmelden
+        </button>
+      </div>
+
         {/* Header Bereich */}
         <div className="text-center mb-10">
           <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight mb-2">
